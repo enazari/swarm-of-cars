@@ -1,0 +1,7 @@
+data/
+ckpt/
+logs/
+__pycache__/
+*.pyc
+*.log
+nohup.out

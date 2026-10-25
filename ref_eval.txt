@@ -1,0 +1,3 @@
+{'policy': 'rule', 'safety': True, 'scenes': 96, 'cars': 1338, 'arrived': 1003, 'arrived_pct': 74.96, 'cc': 39, 'cd': 12, 'override': 78907, 'mean_t': 6.67, 'stream_arrived_pct': 100.0, 'crowd_arrived_pct': 55.3} wall 1s
+{'policy': 'rule', 'safety': False, 'scenes': 96, 'cars': 1338, 'arrived': 1334, 'arrived_pct': 99.7, 'cc': 258, 'cd': 49, 'override': 0, 'mean_t': 7.22, 'stream_arrived_pct': 100.0, 'crowd_arrived_pct': 99.5} wall 1s
+{'policy': 'teacher', 'safety': False, 'scenes': 96, 'cars': 1338, 'arrived': 1321, 'arrived_pct': 98.73, 'cc': 1, 'cd': 0, 'override': 0, 'mean_t': 7.16, 'stream_arrived_pct': 99.2, 'crowd_arrived_pct': 98.4} wall 66s

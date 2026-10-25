@@ -1,0 +1,24 @@
+d16k_s0|0|--kind diff --width 32 --nblk 2 --d 24 --ec 0.1 --pool 1 --seed 0 --lr 1e-3
+bc16k_s0|1|--kind bc --width 32 --nblk 2 --d 24 --ec 0.1 --pool 1 --seed 0 --lr 1e-3
+d8k_s0|0|--kind diff --width 16 --nblk 1 --d 16 --ec 0.1 --pool 1 --seed 0 --lr 1e-3
+bc8k_s0|1|--kind bc --width 16 --nblk 1 --d 16 --ec 0.1 --pool 1 --seed 0 --lr 1e-3
+d4k_s0|0|--kind diff --width 20 --nblk 1 --d 12 --ec 0.04 --pool 1 --seed 0 --lr 1e-3
+bc4k_s0|1|--kind bc --width 20 --nblk 1 --d 12 --ec 0.04 --pool 1 --seed 0 --lr 1e-3
+d2k_s0|0|--kind diff --width 8 --nblk 1 --d 8 --ec 0.02 --pool 1 --seed 0 --lr 1e-3
+bc2k_s0|1|--kind bc --width 8 --nblk 1 --d 8 --ec 0.02 --pool 1 --seed 0 --lr 1e-3
+d1k_s0|0|--kind diff --width 8 --nblk 1 --d 4 --ec 0.02 --pool 2 --seed 0 --lr 1e-3
+bc1k_s0|1|--kind bc --width 8 --nblk 1 --d 4 --ec 0.02 --pool 2 --seed 0 --lr 1e-3
+d32k_s1|0|--kind diff --width 40 --nblk 2 --d 32 --ec 0.12 --seed 1 --lr 1e-3
+bc32k_s1|1|--kind bc --width 40 --nblk 2 --d 32 --ec 0.12 --seed 1 --lr 1e-3
+d32k_s2|0|--kind diff --width 40 --nblk 2 --d 32 --ec 0.12 --seed 2 --lr 1e-3
+bc32k_s2|1|--kind bc --width 40 --nblk 2 --d 32 --ec 0.12 --seed 2 --lr 1e-3
+d2k_s1|0|--kind diff --width 8 --nblk 1 --d 8 --ec 0.02 --pool 1 --seed 1 --lr 1e-3
+bc2k_s1|1|--kind bc --width 8 --nblk 1 --d 8 --ec 0.02 --pool 1 --seed 1 --lr 1e-3
+d2k_s2|0|--kind diff --width 8 --nblk 1 --d 8 --ec 0.02 --pool 1 --seed 2 --lr 1e-3
+bc2k_s2|1|--kind bc --width 8 --nblk 1 --d 8 --ec 0.02 --pool 1 --seed 2 --lr 1e-3
+d1k_s1|0|--kind diff --width 8 --nblk 1 --d 4 --ec 0.02 --pool 2 --seed 1 --lr 1e-3
+bc1k_s1|1|--kind bc --width 8 --nblk 1 --d 4 --ec 0.02 --pool 2 --seed 1 --lr 1e-3
+d1k_s2|0|--kind diff --width 8 --nblk 1 --d 4 --ec 0.02 --pool 2 --seed 2 --lr 1e-3
+bc1k_s2|1|--kind bc --width 8 --nblk 1 --d 4 --ec 0.02 --pool 2 --seed 2 --lr 1e-3
+d5m8_s0|0|--kind diff --width 512 --nblk 6 --d 256 --seed 0 --lr 3e-4
+bc5m8_s0|1|--kind bc --width 512 --nblk 6 --d 256 --seed 0 --lr 3e-4

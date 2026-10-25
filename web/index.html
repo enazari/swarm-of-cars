@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Diffusion policy cars</title>
+  <style>
+    :root { --bg: #fafafa; --fg: #222; --muted: #666; --line: #ccc; --card: #fff; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #aaa; --line: #444; --card: #222; } }
+    body { margin: 0; padding: 20px; background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; }
+    h1 { font-size: 1.25rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 12px; max-width: 70ch; }
+    #stage { position: relative; width: 100%; max-width: 1100px; height: 520px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; user-select: none; }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+    .ctl { display: inline-flex; gap: 6px; align-items: center; }
+    .ctl input { width: 90px; }
+    .card { position: absolute; left: 0; top: 0; width: 190px; height: 70px; box-sizing: border-box; padding: 9px 12px; background: var(--card);
+      border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.12); cursor: grab; touch-action: none; z-index: 1; }
+    .card.dragging { cursor: grabbing; box-shadow: 0 6px 18px rgba(0,0,0,.25); z-index: 3; }
+    .card b { display: block; font-size: 0.95rem; }
+    .card span { font-size: 0.78rem; color: var(--muted); }
+    #bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; font-size: 0.85rem; }
+    button { font: inherit; font-size: 0.8rem; padding: 3px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--card); color: var(--fg); cursor: pointer; }
+    #hud { position: absolute; left: 10px; top: 8px; z-index: 4; font: 0.78rem ui-monospace, monospace; pointer-events: none; }
+    #stats { color: var(--muted); font-size: 0.8rem; font-family: ui-monospace, monospace; white-space: pre; }
+    .note { color: var(--muted); font-size: 0.85rem; max-width: 80ch; }
+  </style>
+</head>
+<body>
+  <h1>Rule-based vs rule-based + diffusion</h1>
+  <p class="sub">Every time a car appears at your mouse, <b>two cars</b> appear on the same spot with the same goal, one in each of two identical worlds that run at once and never see each other:
+    <b>R</b> is steered by hand-written rules, <b>D</b> by a small diffusion network (the World button switches between only R, only D, the two worlds on top of each other, or one shared world in which R and D cars are the same traffic and collide; every switch starts over with an empty stage). Both get the same GPS-style route around the cards (a classic shortest-path search); that route is all the rules use.
+    The network also sees the map and the nearby cars, and every 0.25 s denoises a 2 s plan from random noise (the lines are those plans: bold = the part the car drives).
+    Compare how they handle cards and traffic: orange rings are impacts, a red ring means a car has not moved for 10 s. You can drag the cards (they shove cars) and grab and throw cars.</p>
+  <div id="bar">
+    <button id="pause">Pause</button>
+    <button id="viz" aria-pressed="true">Denoising view: on</button>
+    <label class="ctl">spawn / s <input id="rate" type="range" min="1" max="20" value="3"><b id="ratev">3</b></label>
+    <button id="showbtn">World: two worlds, same space</button>
+    <button id="live" aria-pressed="false">Plans: slow denoising, every 2.5 s</button>
+    <button id="unstickbtn">Unstick: off</button>
+    <button id="execbtn">Drive per plan: 1 step</button>
+    <button id="mode" aria-pressed="true">View: all cars, denoising</button>
+    <button id="inspect">Inspect denoising steps</button>
+    <input id="istep" type="range" min="0" max="8" value="0" style="display:none">
+    <span id="status">loading model…</span>
+  </div>
+  <div id="stage"><canvas id="cv"></canvas><div id="hud"></div></div>
+  <pre id="readout" style="display:none;font:0.78rem ui-monospace,monospace;margin:8px 0;white-space:pre"></pre>
+  <div id="stats"></div>
+  <p class="note">Drag the cards to change the map: every car re-reads it on the next step. The policy was trained on layouts with gaps of at least 45 px between cards,
+    so very tight gaps are outside what it has seen. The strict rule-based driver follows the route and brakes for a car straight ahead, nothing more. Each card has an inverted-U tunnel entrance cut into its bottom edge. Grab a car with the mouse and let go to throw it with the speed of the mouse; drag a card into cars and it shoves them with its momentum. Cars never overlap a block: they can touch it and are pushed back. Cars drive in from the front; inside the U they only brush the sides without bouncing, and once at the middle they go on through the back, left or right wall and out of sight. Cars have real collision physics: a hit car slides on in the direction of the push and bounces off cards by speed and angle, and nothing steps in to stop a crash.</p>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+  <script src="sim.js?v=physics4"></script>
+  <script>
+  (async () => {
+    const stage = document.getElementById('stage'), cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+    const statusEl = document.getElementById('status'), hud = document.getElementById('hud'), statsEl = document.getElementById('stats');
+    const { CS, DT, SUB, DTC, GOAL_R, MAXST } = Sim;
+    let EXEC = 1;   // plan steps (0.25 s each) the car drives before it makes a new plan
+    let unstick = new URLSearchParams(location.search).get('unstick') === '1';   // off by default: a D car with no progress for 10 s then drives its whole 8-step plan every other plan
+    const G = 300, NSLOT = 2 * G, STEPS = 8, K = 24, KA = 1, HC = 8;   // KA: plans per car in the all-cars view
+    // two identical worlds in one stage: slots 0..G-1 are the diffusion world (D), slots G..2G-1 the strictly rule-based world (R); the two never see or touch each other
+    const isD = k => k < G;
+    const TITLES = [['Masterface Attacks', 'Adversarial face verification'], ['LLM Face Verification', 'Multimodal verification'], ['ArcFace vs InfoNCE', 'Representation learning'],
+      ['autoGAN', 'Automatic GAN experiments'], ['GAN Upsampling', 'Upsampling with GANs'], ['Trio Diffusion', 'Infinite image generation'],
+      ['TailorGAN', 'Clothing attribute editing'], ['DodgePersonation', 'Dodging and impersonation']];
+    { const sd = new URLSearchParams(location.search).get('seed');       // ?seed=N makes spawns and denoising noise repeatable (for fair comparisons in tests)
+      if (sd !== null) { let a = (+sd * 2654435761) >>> 0; Math.random = () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; } }
+    const rand = (a, b) => a + Math.random() * (b - a);
+
+    // ---------------------------------------------------------------- model
+    let session;
+    try {
+      ort.env.wasm.numThreads = 1;
+      const which = new URLSearchParams(location.search).get('model') || '32k';      // default: the 32k-parameter network; ?model=2k, ?model=small (5.8M) or ?model=big (13.7M)
+      const FILES = { big: ['policy_big.onnx', '13.7M'], small: ['policy_small.onnx', '5.8M'], '32k': ['policy_32k.onnx', '32k'], '2k': ['policy_2k.onnx', '2k'] }, [file, label] = FILES[which] || FILES['32k'];
+      session = await ort.InferenceSession.create(file, { executionProviders: ['wasm'] });
+      statusEl.textContent = 'model loaded (' + label + ' parameters)';
+    } catch (e) { statusEl.textContent = 'could not load the model: ' + e; return; }
+
+    // ---------------------------------------------------------------- cards
+    const cards = TITLES.map(([t, d]) => {
+      const el = document.createElement('div');
+      el.className = 'card'; el.innerHTML = `<b>${t}</b><span>${d}</span>`; stage.insertBefore(el, cv);
+      return { el, x: 0, y: 0, w: 190, h: 70, vx: 0, vy: 0, lt: 0 };   // vx, vy: velocity of the card while it is dragged (px/s)
+    });
+    let W = 0, H = 0, gw = 0, gh = 0, blocked = null, dpr = 1;
+    const rect = c => [c.x, c.y, c.x + c.w, c.y + c.h];
+    // parking slots: a notch cut into the bottom edge of every card, SW wide and SD deep, just big enough for one car (22 x 11 px, +-8 px clearance)
+    const TUNLEN = 50;   // px a car drives on through the tunnel after it arrives, at the speed it came in with, until it is out of sight
+    const SW = 44, SD = 42, HS = 58;   // tunnel bay cut into the bottom edge of the card: SW wide, SD deep; the card is HS + SD = 100 tall
+    function walls() {
+      if (!slots) return cards.map(rect);
+      const r = [];
+      for (const c of cards) { const m = c.x + c.w / 2, yb = c.y + c.h; r.push([c.x, c.y, m - SW / 2, yb], [m + SW / 2, c.y, c.x + c.w, yb], [m - SW / 2, c.y, m + SW / 2, yb - SD]); }
+      return r;
+    }
+    const wallVels = () => slots ? cards.flatMap(c => [[c.vx, c.vy], [c.vx, c.vy], [c.vx, c.vy]]) : cards.map(c => [c.vx, c.vy]);   // velocity of each wall rect = velocity of its card
+    const owners = () => cards.flatMap((_, i) => [i, i, i]);                                  // card of each wall rect
+    const bays = () => cards.map(c => { const m = c.x + c.w / 2; return [m - SW / 2, c.y + HS, m + SW / 2, c.y + c.h + 8]; });   // inside a bay a car only touches the walls softly (no bounce or flash)
+    function placeCard(c) {
+      c.x = Math.max(8, Math.min(W - c.w - 8, c.x)); c.y = Math.max(8, Math.min(H - c.h - 8, c.y));
+      c.el.style.transform = `translate(${c.x}px, ${c.y}px)`;
+    }
+    function layout() {
+      const cols = 4, rows = Math.ceil(cards.length / cols);
+      cards.forEach((c, i) => {
+        c.x = (i % cols + 0.5) / cols * W - c.w / 2 + rand(-18, 18); c.y = (Math.floor(i / cols) + 0.5) / rows * H - c.h / 2 + rand(-14, 14); placeCard(c);
+      });
+    }
+
+    // ---------------------------------------------------------------- cars
+    const S = { X: new Float64Array(NSLOT), Y: new Float64Array(NSLOT), TH: new Float64Array(NSLOT), V: new Float64Array(NSLOT), state: new Int32Array(NSLOT), grp: Int8Array.from({ length: NSLOT }, (_, k) => k < G ? 1 : 0) };
+    const car = Array.from({ length: NSLOT }, () => ({ card: 0, side: 0, frac: 0.5, hue: 0, field: null, park: 0, alpha: 0, chunk: new Float32Array(16), ptr: 99, prevA: [0, 0], stuck: 0, trail: [] }));
+    const B = { bx: new Float64Array(NSLOT), by: new Float64Array(NSLOT), om: new Float64Array(NSLOT) };   // slide velocity and spin left by impacts (physics in sim.js)
+    const sparks = [];   // [x, y, strength, age] impact flashes
+    const goals = Array.from({ length: NSLOT }, () => [0, 0]);
+    const prevA = car.map(c => c.prevA);
+    let vt = new Float64Array(NSLOT), dl = new Float64Array(NSLOT);
+    const mkStats = () => ({ arrived: 0, cc: 0, cd: 0, gaveUp: 0, tripSum: 0 });
+    const stats = { D: mkStats(), R: mkStats() }, st = k => isD(k) ? stats.D : stats.R;
+    let simT = 0;   // simulated seconds
+    const contact = { cc: new Set(), cd: new Set() };
+    const QP = new URLSearchParams(location.search);
+    let maxCars = +QP.get('max') || Infinity, spawnRate = +QP.get('rate') || 3;   // no cap on the number of cars (?max=N only for tests); new cars per second
+    let live = new URLSearchParams(location.search).get('live') === '1', paused = false, showViz = true, slots = true, worldMode = Math.min(3, Math.max(0, +(new URLSearchParams(location.search).get('mode') ?? 2))), nextType = 0, allMode = new URLSearchParams(location.search).get('all') !== '0', focus = -1, spawnT = 0, rr = 0;
+    const mouse = { x: 120, y: 120 };
+
+    function goalOf(k) {
+      const c = cards[car[k].card], o = 22, f = car[k].frac;
+      if (slots) return [c.x + c.w / 2, c.y + HS + SD / 2];
+      return [[c.x + f * c.w, c.y - o], [c.x + f * c.w, c.y + c.h + o], [c.x - o, c.y + f * c.h], [c.x + c.w + o, c.y + f * c.h]][car[k].side];
+    }
+    // route fields per card: F plans as if the hood's left and right openings were walled off (prefers the front), O uses all three openings; cars share them
+    let cardFields = [];
+    function buildCardFields() {
+      const virt = [];
+      for (const c of cards) { const m = c.x + c.w / 2, y0 = c.y + HS; virt.push([m - SW / 2 - 4, y0, m - SW / 2, y0 + SD], [m + SW / 2, y0, m + SW / 2 + 4, y0 + SD]); }
+      const blockedF = Sim.buildBlocked(walls().concat(virt), W, H, Sim.INFLATE);
+      cardFields = cards.map(c => { const gx = Math.trunc((c.x + c.w / 2) / CS), gy = Math.trunc((c.y + HS + SD / 2) / CS);
+        return { F: Sim.dijkstra(blockedF, gw, gh, gx, gy), O: Sim.dijkstra(blocked, gw, gh, gx, gy) }; });
+    }
+    const SIDE_PEN = QP.get('pen') !== null ? +QP.get('pen') : 150;   // px of extra route length a side entrance must save before a car uses it instead of the front
+    function chooseField(k, force, x = S.X[k], y = S.Y[k]) {
+      const cf = cardFields[car[k].card], ci = Math.min(gh - 1, Math.max(0, Math.trunc(y / CS))) * gw + Math.min(gw - 1, Math.max(0, Math.trunc(x / CS)));
+      const cF = cf.F[ci], cO = cf.O[ci], pen = car[k].front === undefined || force ? SIDE_PEN : SIDE_PEN + (car[k].front ? 40 : -40);   // hysteresis
+      const front = cF < 1e8 && cF <= cO + pen;
+      car[k].front = front;
+      const f = front ? cf.F : cf.O;
+      if (car[k].field !== f) { car[k].field = f; car[k].ptr = 99; }
+    }
+    function refreshWorld() {
+      blocked = Sim.buildBlocked(walls(), W, H, Sim.INFLATE); buildCardFields();
+      for (let k = 0; k < NSLOT; k++) if (S.state[k] === 1 || S.state[k] === 2) {
+        goals[k] = goalOf(k);
+        chooseField(k, true); car[k].ptr = 99;                  // plan again on the new map
+      }
+    }
+    function nearestFree(px, py) {
+      let cx = Math.min(gw - 1, Math.max(0, Math.trunc(px / CS))), cy = Math.min(gh - 1, Math.max(0, Math.trunc(py / CS)));
+      if (!blocked[cy * gw + cx]) return [(cx + 0.5) * CS, (cy + 0.5) * CS];
+      for (let r = 1; r < 40; r++) {
+        let best = null, bd = 1e9;
+        for (let j = cy - r; j <= cy + r; j++) for (let i = cx - r; i <= cx + r; i++) {
+          if (i < 0 || j < 0 || i >= gw || j >= gh || Math.max(Math.abs(i - cx), Math.abs(j - cy)) !== r || blocked[j * gw + i]) continue;
+          const d = (i - cx) ** 2 + (j - cy) ** 2; if (d < bd) { bd = d; best = [i, j]; }
+        }
+        if (best) return [(best[0] + 0.5) * CS, (best[1] + 0.5) * CS];
+      }
+      return [px, py];
+    }
+    function initCar(k, px, py, card) {
+      const c = car[k];
+      c.card = card; c.side = 1; goals[k] = goalOf(k);
+      c.pbest = undefined; c.pt = 0; c.stuckMode = false; c.flip = false; c.exec = EXEC; c.hue = (c.card / cards.length) * 360; c.alpha = 0; c.ptr = 99; c.stuck = 0; c.at = 0; c.ax = undefined; c.trail = []; c.prevA[0] = 0; c.prevA[1] = 0; c.t0 = simT;
+      c.front = undefined; c.field = null; chooseField(k, true, px, py);
+      const rp = Sim.routePoints(c.field, gw, gh, px, py, goals[k][0], goals[k][1]);
+      S.X[k] = px; S.Y[k] = py; S.TH[k] = Math.atan2(rp[1][1] - py, rp[1][0] - px); S.V[k] = 0; S.state[k] = 1; B.bx[k] = B.by[k] = B.om[k] = 0;
+    }
+    function trySpawn() {
+      // two cars per spawn, heading for the same tunnel. Two worlds: both at the same spot, one in each world. One world: side by side, about 30 px apart, as R and D.
+      const kD = S.state.findIndex((s, k) => isD(k) && s === 0), kR = S.state.findIndex((s, k) => !isD(k) && s === 0);
+      let nD = 0; for (let k = worldMode === 0 ? G : 0; k < (worldMode === 0 ? NSLOT : G); k++) if (S.state[k] === 1 || S.state[k] === 2) nD++;   // cars of the world that is running
+      const needD = worldMode !== 0, needR = worldMode !== 1;                 // only R: R cars only; only D: D cars only; otherwise one of each
+      if ((needD && kD < 0) || (needR && kR < 0) || nD >= maxCars) return;
+      const free = (x, y) => { for (let j = 0; j < NSLOT; j++) if ((S.state[j] === 1 || S.state[j] === 2) && Math.hypot(S.X[j] - x, S.Y[j] - y) < 30) return false; return true; };
+      const [px, py] = nearestFree(mouse.x + rand(-3, 3), mouse.y + rand(-3, 3));
+      if (!free(px, py)) return;
+      let qx = px, qy = py;
+      if (worldMode === 3) {                         // the partner car starts next to the first, in a free spot about 30 px away
+        qx = qy = NaN; const a0 = Math.random() * 6.283;
+        for (let t = 0; t < 8 && Number.isNaN(qx); t++) {
+          const ang = a0 + t * 0.785, x = px + Math.cos(ang) * 32, y = py + Math.sin(ang) * 32, ci = Math.trunc(y / CS) * gw + Math.trunc(x / CS);
+          if (x > 20 && y > 20 && x < W - 20 && y < H - 20 && !blocked[ci] && Math.hypot(x - px, y - py) >= 30 && free(x, y)) { qx = x; qy = y; }
+        }
+        if (Number.isNaN(qx)) return;
+      }
+      const card = QP.get('card') !== null ? +QP.get('card') : (Math.random() * cards.length) | 0;   // many cars may head for one tunnel: they queue (?card=N sends every car to card N, a test helper)
+      delete allViz[kD]; delete allViz[kR]; if (viz && (viz.car === kD || viz.car === kR)) viz = null;
+      if (needD) initCar(kD, px, py, card);
+      if (needR) initCar(kR, qx, qy, card);
+    }
+
+    // ---------------------------------------------------------------- policy
+    let choiceT = 0;
+    let inspecting = false, forceAll = false, allT = 0;
+    let viz = null;   // {car, F, xs, xhat, t0}
+    const allViz = {};   // car index -> {car, F, xs, xhat, t0}: the single plan each car drives, kept for the all-cars view
+    // strictly rule-based driver: follow the same GPS route with pure pursuit, slow down for a car in front, nothing else (no waiting, no yielding, no reversing, no learning)
+    function ruleDrive(k) {
+      const x = S.X[k], y = S.Y[k], c = Math.cos(S.TH[k]), sn = Math.sin(S.TH[k]);
+      const rp = Sim.routePoints(car[k].field, gw, gh, x, y, goals[k][0], goals[k][1]), dg = Math.hypot(goals[k][0] - x, goals[k][1] - y);
+      const tgt = dg < 40 ? goals[k] : rp[2];
+      const dx = tgt[0] - x, dy = tgt[1] - y, lx = dx * c + dy * sn, ly = -dx * sn + dy * c, Ld = Math.max(Math.hypot(dx, dy), 1), alpha = Math.atan2(ly, lx);
+      dl[k] = Math.max(-MAXST, Math.min(MAXST, Math.atan2(2 * Sim.WB * Math.sin(alpha), Ld)));
+      let v = lx < 0 ? 20 : Math.min(60, 8 + 0.9 * dg) * (1 - 0.5 * Math.min(1, Math.abs(alpha) / 1.2));
+      for (let j = 0; j < NSLOT; j++) {            // brake for a car right in front (only cars of its own world; in the one-world mode that is every car)
+        if (j === k || (S.state[j] !== 1 && S.state[j] !== 2) || S.grp[j] !== S.grp[k]) continue;
+        const ex = S.X[j] - x, ey = S.Y[j] - y, fwd = ex * c + ey * sn, lat = -ex * sn + ey * c;
+        if (fwd > 0 && fwd < 70 && Math.abs(lat) < 16) v = Math.min(v, Math.max(0, (fwd - 24) * 1.5));
+      }
+      vt[k] = v; prevA[k][0] = Math.max(-1, Math.min(1, (v - 22.5) / 52.5)); prevA[k][1] = dl[k] / MAXST;
+    }
+    async function decide() {
+      vt.fill(0); dl.fill(0);
+      for (let k = G; k < NSLOT; k++) if (S.state[k] === 1) ruleDrive(k);          // the rule-based world
+      const need = [];
+      for (let k = 0; k < G; k++) if (S.state[k] === 1 && car[k].ptr >= (car[k].exec || EXEC)) need.push(k);
+      if (focus < 0 || S.state[focus] !== 1) { focus = S.state.findIndex((s, k) => isD(k) && s === 1); }
+      const vizNow = showViz && !allMode && !inspecting && focus >= 0 && need.includes(focus) && (!viz || live || performance.now() - viz.t0 > 2500);
+      if (need.length) {
+        const refreshAll = showViz && allMode && (forceAll || live || !allT || performance.now() - allT > 2500);   // one shared cycle: all cars denoise together
+        const rows = need.map(k => ({ k, copies: (vizNow && k === focus) ? K : refreshAll ? KA : 1 }));
+        const B = rows.reduce((a, r) => a + r.copies, 0);
+        const crop = new Float32Array(B * 4096), vec = new Float32Array(B * 18), tok = new Float32Array(B * 48), mask = new Float32Array(B * 6), noise = new Float32Array(B * 16);
+        let b = 0; const first = {};
+        for (const { k, copies } of rows) {
+          Sim.buildObs(k, S, goals, walls(), W, H, car[k].field, gw, gh, prevA, crop.subarray(b * 4096, (b + 1) * 4096), vec.subarray(b * 18, (b + 1) * 18), tok.subarray(b * 48, (b + 1) * 48), mask.subarray(b * 6, (b + 1) * 6));
+          first[k] = b;
+          for (let c = 1; c < copies; c++) {
+            crop.copyWithin((b + c) * 4096, b * 4096, (b + 1) * 4096); vec.copyWithin((b + c) * 18, b * 18, (b + 1) * 18);
+            tok.copyWithin((b + c) * 48, b * 48, (b + 1) * 48); mask.copyWithin((b + c) * 6, b * 6, (b + 1) * 6);
+          }
+          b += copies;
+        }
+        for (let i = 0; i < noise.length; i++) noise[i] = Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(6.283185 * Math.random());
+        const out = await session.run({ crop: new ort.Tensor('float32', crop, [B, 4, 32, 32]), vec: new ort.Tensor('float32', vec, [B, 18]), tok: new ort.Tensor('float32', tok, [B, 6, 8]),
+          mask: new ort.Tensor('float32', mask, [B, 6]), noise: new ort.Tensor('float32', noise, [B, 16]) });
+        const chunk = out.chunk.data;
+        for (const { k } of rows) {
+          car[k].chunk.set(chunk.subarray(first[k] * 16, first[k] * 16 + 16)); car[k].ptr = 0;
+          car[k].exec = EXEC;
+          if (unstick && car[k].stuckMode && (car[k].flip = !car[k].flip)) car[k].exec = STEPS;       // stuck: every other plan is driven in full (2 s) before it is replaced
+        }
+        if (refreshAll) {
+          allT = performance.now(); for (const k in allViz) delete allViz[k];
+          for (const { k } of rows) {
+            const f = first[k];
+            allViz[k] = { car: k, F: [S.X[k], S.Y[k], S.TH[k], S.V[k]], t0: allT,
+              xs: out.xs.data.slice(f * (STEPS + 1) * 16, (f + KA) * (STEPS + 1) * 16), xhat: out.xhat.data.slice(f * STEPS * 16, (f + KA) * STEPS * 16) };
+          }
+        }
+        if (vizNow && first[focus] !== undefined) {
+          const f = first[focus];
+          viz = { car: focus, F: [S.X[focus], S.Y[focus], S.TH[focus], S.V[focus]], t0: performance.now(),
+            xs: out.xs.data.slice(f * (STEPS + 1) * 16, (f + K) * (STEPS + 1) * 16), xhat: out.xhat.data.slice(f * STEPS * 16, (f + K) * STEPS * 16) };
+        }
+      }
+      for (let k = 0; k < G; k++) if (S.state[k] === 1) {
+        const a0 = car[k].chunk[car[k].ptr * 2], a1 = car[k].chunk[car[k].ptr * 2 + 1];
+        vt[k] = a0 * 52.5 + 22.5; dl[k] = a1 * MAXST; car[k].ptr++;
+        prevA[k][0] = Math.max(-1, Math.min(1, (vt[k] - 22.5) / 52.5)); prevA[k][1] = dl[k] / MAXST;
+      }
+    }
+
+    // ---------------------------------------------------------------- bookkeeping after each decision
+    const ARR = 12;   // px from the middle of the tunnel at which a car counts as arrived; checked after every 0.05 s step, so a fast car cannot skip past it and hit the back wall
+    function arrive(i) {
+      S.state[i] = 2; car[i].tv = Math.min(75, Math.max(30, Math.abs(S.V[i]))); car[i].tun = 0; car[i].px = S.X[i]; car[i].py = S.Y[i]; car[i].pth = S.TH[i];
+      { const u = Math.random(); car[i].exit = u < 0.5 ? 'back' : u < 0.75 ? 'left' : 'right'; }           // inside the bay the car goes on through the back, left or right wall
+      car[i].park = (TUNLEN + 20) / car[i].tv; S.V[i] = 0; st(i).arrived++; st(i).tripSum += simT - car[i].t0;
+    }
+    function checkArrivals() { if (slots) for (let i = 0; i < NSLOT; i++) if (S.state[i] === 1 && !(held && held.k === i) && Math.hypot(S.X[i] - goals[i][0], S.Y[i] - goals[i][1]) < ARR) arrive(i); }
+    function afterDecision() {
+      const cr = walls();
+      for (let i = 0; i < NSLOT; i++) {
+        if (S.state[i] === 1) {
+          if (Math.hypot(S.X[i] - goals[i][0], S.Y[i] - goals[i][1]) < (slots ? ARR : GOAL_R)) arrive(i);
+          const cc = car[i];
+          if (unstick && isD(i)) {                    // no progress for 10 s (no 15 px gain along the route and no 30 px of movement): stuck mode, until progress
+            const ci = Math.min(gh - 1, Math.max(0, Math.trunc(S.Y[i] / CS))) * gw + Math.min(gw - 1, Math.max(0, Math.trunc(S.X[i] / CS))), fv = cc.field ? cc.field[ci] : 1e9;
+            if (cc.pbest === undefined || fv < cc.pbest - 15 || Math.hypot(S.X[i] - cc.px0, S.Y[i] - cc.py0) > 30) { cc.pbest = Math.min(fv, cc.pbest === undefined ? 1e9 : cc.pbest); cc.px0 = S.X[i]; cc.py0 = S.Y[i]; cc.pt = 0; cc.stuckMode = false; }
+            else { cc.pt += DTC; if (cc.pt > 10) cc.stuckMode = true; }
+          } else cc.stuckMode = false;
+          // clean-up only (no driving): a car that has stayed within 20 px of one spot for 60 s is removed
+          if ((held && held.k === i) || cc.ax === undefined || Math.hypot(S.X[i] - cc.ax, S.Y[i] - cc.ay) > 20) { cc.ax = S.X[i]; cc.ay = S.Y[i]; cc.at = 0; } else cc.at += DTC;
+          if (cc.at > 60) { S.state[i] = 0; cc.alpha = 0; st(i).gaveUp++; }
+        } else if (S.state[i] === 2) {
+          const c = cards[car[i].card]; // keep a parked car with its card
+          goals[i] = goalOf(i); car[i].park -= DTC; if (car[i].park <= 0) { S.state[i] = 0; car[i].alpha = 0; }
+        }
+      }
+      const liveIdx = []; for (let i = 0; i < NSLOT; i++) if (S.state[i] === 1 || S.state[i] === 2) liveIdx.push(i);
+      const bb = bays();
+      for (let u = 0; u < liveIdx.length; u++) {
+        const i = liveIdx[u];
+        const inBay = slots && bb.some(b => S.X[i] > b[0] && S.X[i] < b[2] && S.Y[i] > b[1] && S.Y[i] < b[3]);      // inside a bay a car passes through the walls, so that is not a contact
+        const hitc = S.state[i] === 1 && !inBay && Sim.cardHit(S.X[i], S.Y[i], S.TH[i], cr, W, H, 0);
+        if (hitc && !contact.cd.has(i)) { st(i).cd++; contact.cd.add(i); } else if (!hitc) contact.cd.delete(i);
+        for (let v = u + 1; v < liveIdx.length; v++) {
+          const j = liveIdx[v];
+          if (S.grp[i] !== S.grp[j]) continue;
+          const key = i * 1000 + j, hit = Math.abs(S.X[i] - S.X[j]) < 40 && Math.abs(S.Y[i] - S.Y[j]) < 40 && Sim.carDist(S.X[i], S.Y[i], S.TH[i], S.X[j], S.Y[j], S.TH[j]) < 12;
+          if (hit && !contact.cc.has(key)) { st(i).cc++; if (isD(i) !== isD(j)) st(j).cc++; contact.cc.add(key); } else if (!hit) contact.cc.delete(key);
+        }
+      }
+      if (slots && ++choiceT % 4 === 0) for (let k = 0; k < NSLOT; k++) if (S.state[k] === 1) chooseField(k, false);
+      spawnT -= DTC; if (spawnT <= 0) { spawnT = 1 / spawnRate; trySpawn(); }
+    }
+
+    // ---------------------------------------------------------------- drawing
+    function rollout(F, chunk) {
+      let [x, y, th, v] = F; const pts = [[x, y]];
+      for (let h = 0; h < HC; h++) {
+        const t = Math.max(-1, Math.min(1, chunk[2 * h])) * 52.5 + 22.5, d = Math.max(-1, Math.min(1, chunk[2 * h + 1])) * MAXST;
+        for (let k = 0; k < SUB; k++) { [x, y, th, v] = Sim.dyn(x, y, th, v, t, d); if (k === 2 || k === SUB - 1) pts.push([x, y]); }
+      }
+      return pts;
+    }
+    function drawViz() {
+      if (!showViz || worldMode === 0) { hud.textContent = ''; return; }
+      if (allMode) {
+        let any = false;
+        for (const k in allViz) if (S.state[k] === 1) { any = drawOne(allViz[k], KA, false) || any; }
+        hud.textContent = any ? (live ? `every car, new plan every ${EXEC * 0.25} s: bold = the first ${EXEC} step${EXEC > 1 ? 's' : ''} it drives, faint = forecast that is replaced at the next plan` : `every car, plan refreshed every 2.5 s: bold = the first ${EXEC} step${EXEC > 1 ? 's' : ''} it drives, dashed = the rest, not executed`) : '';
+        return;
+      }
+      if (!viz) { hud.textContent = ''; return; }
+      drawOne(viz, K, true);
+    }
+    function drawOne(viz, K, dashed) {
+      const forced = +new URLSearchParams(location.search).get('vizstep') || 0;
+      const el = performance.now() - viz.t0, step = inspecting ? +istep.value : forced ? forced : Math.min(STEPS, Math.floor(el / (live ? 20 : 95))), fade = (forced || inspecting || live) ? 1 : (el > 2100 ? Math.max(0, 1 - (el - 2100) / 400) : 1);
+      if (fade <= 0 || S.state[viz.car] !== 1) { if (dashed) hud.textContent = ''; return false; }
+      const hue = car[viz.car].hue, ink = getComputedStyle(stage).color;
+      if (dashed) hud.textContent = step < STEPS ? `denoising step ${step}/${STEPS}   ${K} samples` + (live ? `   bold = the first ${EXEC} step${EXEC > 1 ? 's' : ''} it drives` : '') : 'plan chosen: sample #1' + (live ? `   bold = the first ${EXEC} step${EXEC > 1 ? 's' : ''} it drives` : '');
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      if (K === 1) for (let st = 0; st < step; st++) {           // all-cars view: keep the earlier denoising steps of the single plan as a fading trail
+        const pts = rollout(viz.F, viz.xs.subarray(st * 16, st * 16 + 16));
+        ctx.strokeStyle = `hsl(${hue}, 85%, 55%)`; ctx.globalAlpha = (0.12 + 0.3 * st / STEPS) * fade; ctx.lineWidth = 1.2;
+        ctx.beginPath(); pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)); ctx.stroke();
+      }
+      for (let c = K - 1; c >= 0; c--) {
+        const pts = rollout(viz.F, viz.xs.subarray((c * (STEPS + 1) + step) * 16, (c * (STEPS + 1) + step) * 16 + 16));
+        const main = c === 0 && step === STEPS;
+        ctx.strokeStyle = `hsl(${hue}, 85%, 55%)`;
+        ctx.globalAlpha = (live ? (c === 0 ? 0.3 : 0.18 + 0.12 * step / STEPS) : (main ? 0.55 : K === 1 ? 0.6 : 0.18 + 0.12 * step / STEPS)) * fade;
+        ctx.lineWidth = live ? (c === 0 ? 1 : 1.2) : (main ? 1.6 : K === 1 ? 1.4 : 1.2);
+        ctx.setLineDash(live ? [] : [6, 5]);               // slow mode: the part of the plan that is not executed is dashed
+        ctx.beginPath(); pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)); ctx.stroke(); ctx.setLineDash([]);
+        if (c === 0) {                                    // the steps the car actually drives (the first EXEC steps of the plan) are bold; the rest is only a forecast that is replaced at the next plan
+          ctx.strokeStyle = `hsl(${hue}, 90%, 38%)`; ctx.globalAlpha = fade; ctx.lineWidth = 7;
+          ctx.beginPath(); pts.slice(0, 2 * (car[viz.car].exec || EXEC) + 1).forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)); ctx.stroke();
+        }
+      }
+      if (dashed && step < STEPS) {                        // the model's current guess of the clean plan for sample #1
+        const pts = rollout(viz.F, viz.xhat.subarray(step * 16, step * 16 + 16));
+        ctx.setLineDash([5, 4]); ctx.strokeStyle = ink; ctx.globalAlpha = 0.8 * fade; ctx.lineWidth = 2;
+        ctx.beginPath(); pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)); ctx.stroke(); ctx.setLineDash([]);
+      }
+      ctx.globalAlpha = 1;
+      return true;
+    }
+    function drawSlots() {                           // the tunnel bay cut into the card: dark floor and an inverted U outline
+      if (!slots) return;
+      ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      cards.forEach((c, i) => {
+        const m = c.x + c.w / 2, y0 = c.y + HS, col = `hsl(${(i / cards.length) * 360}, 75%, 45%)`;
+        ctx.globalAlpha = 0.85; ctx.fillStyle = '#14171d'; ctx.fillRect(m - SW / 2, y0, SW, SD);
+        ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(m - SW / 2, y0 + SD); ctx.lineTo(m - SW / 2, y0); ctx.lineTo(m + SW / 2, y0); ctx.lineTo(m + SW / 2, y0 + SD); ctx.stroke();
+      });
+      ctx.restore();
+    }
+    function applySlots() {
+      cards.forEach(c => {
+        c.h = slots ? HS + SD : 70; c.el.style.height = c.h + 'px';
+        c.el.style.clipPath = slots ? `polygon(0 0, ${c.w}px 0, ${c.w}px ${c.h}px, ${c.w / 2 + SW / 2}px ${c.h}px, ${c.w / 2 + SW / 2}px ${c.h - SD}px, ${c.w / 2 - SW / 2}px ${c.h - SD}px, ${c.w / 2 - SW / 2}px ${c.h}px, 0 ${c.h}px)` : '';
+        placeCard(c);
+      });
+      for (let k = 0; k < NSLOT; k++) { S.state[k] = 0; car[k].alpha = 0; }
+      viz = null; for (const k in allViz) delete allViz[k];
+      refreshWorld();
+    }
+    function drawTrails() {                         // where each car really went in the last 2 s
+      if (!live || !showViz) return;
+      ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (let k = 0; k < NSLOT; k++) {
+        if (S.state[k] !== 1 || !vis(k)) continue;
+        const tr = car[k].trail; if (tr.length < 4) continue;
+        ctx.strokeStyle = `hsl(${car[k].hue}, 60%, 38%)`;
+        for (let i = 2; i < tr.length; i += 2) { ctx.globalAlpha = 0.9 * (i / tr.length); ctx.beginPath(); ctx.moveTo(tr[i - 2], tr[i - 1]); ctx.lineTo(tr[i], tr[i + 1]); ctx.stroke(); }
+      }
+      ctx.globalAlpha = 1;
+    }
+    function drawSparks() {                        // a ring that grows and fades at every impact, bigger for harder hits
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const sp = sparks[i]; sp[3] += 1 / 60;
+        if (sp[3] > 0.4) { sparks.splice(i, 1); continue; }
+        if (!vis(sp[4])) continue;                      // an impact in a hidden world is not drawn
+        ctx.globalAlpha = (1 - sp[3] / 0.4) * 0.9; ctx.strokeStyle = '#e8590c'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sp[0], sp[1], 4 + (10 + 14 * sp[2]) * sp[3] / 0.4, 0, 6.283); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    // worldMode: 0 only R, 1 only D, 2 two worlds in the same space (they overlap, never interact), 3 one world in the same space (R and D cars are the same traffic)
+    const vis = k => worldMode >= 2 || (worldMode === 0 && !isD(k)) || (worldMode === 1 && isD(k));
+    function drawHeld() {
+      if (!held || S.state[held.k] !== 1) return;
+      ctx.save(); ctx.strokeStyle = '#e8590c'; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.9; ctx.beginPath(); ctx.arc(S.X[held.k], S.Y[held.k], 17, 0, 6.283); ctx.stroke(); ctx.restore();
+    }
+    function drawCars() {
+      for (let i = 0; i < NSLOT; i++) {
+        if ((S.state[i] !== 1 && S.state[i] !== 2) || !vis(i)) continue;
+        const c = car[i]; c.alpha = Math.min(1, c.alpha + 0.08);
+        ctx.save();
+        let ox = 0, oy = 0, fade = 1;
+        let thv = S.TH[i];
+        if (slots && S.state[i] === 2) {             // inside the bay the car has no collisions: it drives on through the back, left or right wall; only the part inside the bay is visible, so it vanishes into the wall
+          const cd = cards[c.card], m = cd.x + cd.w / 2, y0 = cd.y + HS, ym = y0 + SD / 2;
+          const T = c.exit === 'left' ? [m - SW / 2 - 40, ym] : c.exit === 'right' ? [m + SW / 2 + 40, ym] : [m, y0 - 40];
+          const dx = T[0] - c.px, dy = T[1] - c.py, L = Math.hypot(dx, dy) || 1, d = Math.min(L, c.tv * c.tun), ang = Math.atan2(dy, dx);
+          let da = ang - c.pth; da = Math.atan2(Math.sin(da), Math.cos(da));
+          thv = c.pth + da * Math.min(1, c.tun / 0.3);                       // turn toward the chosen wall while driving
+          ox = c.px + dx / L * d - S.X[i]; oy = c.py + dy / L * d - S.Y[i];
+          ctx.beginPath(); ctx.rect(m - SW / 2, y0, SW, SD); ctx.clip();
+        }
+        ctx.translate(S.X[i] + ox, S.Y[i] + oy); ctx.rotate(thv); ctx.globalAlpha = fade;
+        ctx.globalAlpha = c.alpha * 0.22 * fade; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.roundRect(-9.5, -3.5, 22, 11, 3); ctx.fill();
+        ctx.globalAlpha = c.alpha * fade; ctx.fillStyle = `hsl(${c.hue}, 75%, 52%)`; ctx.beginPath(); ctx.roundRect(-11, -5.5, 22, 11, 3); ctx.fill();
+        ctx.fillStyle = 'rgba(20,30,40,.65)'; ctx.fillRect(2, -4, 4.5, 8); ctx.fillRect(-6.5, -3.7, 2.5, 7.4);
+        ctx.fillStyle = '#fff6b0'; ctx.fillRect(9.2, -4.5, 1.8, 2); ctx.fillRect(9.2, 2.5, 1.8, 2);
+        ctx.fillStyle = S.V[i] < -1 ? '#fff' : '#7a1a1a'; ctx.fillRect(-11, -4.5, 1.8, 2); ctx.fillRect(-11, 2.5, 1.8, 2);
+        ctx.restore();
+        if (S.state[i] === 1) {                      // label: D = diffusion world, R = rule-based world; a red ring marks a car that has not moved for 10 s
+          const lx = S.X[i], ly = S.Y[i] - 15, d = isD(i);
+          ctx.globalAlpha = c.alpha; ctx.fillStyle = d ? '#e8590c' : '#455a64'; ctx.beginPath(); ctx.roundRect(lx - 6, ly - 6, 12, 12, 3); ctx.fill();
+          ctx.fillStyle = '#fff'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(d ? 'D' : 'R', lx, ly + 0.5);
+          if (unstick && c.stuckMode) { ctx.strokeStyle = '#7048e8'; ctx.lineWidth = 2.5; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.arc(S.X[i], S.Y[i], 19, 0, 6.283); ctx.stroke(); ctx.setLineDash([]); }       // purple dashes: driving its plan in full
+          if (c.at > 10) { ctx.strokeStyle = '#e03131'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(S.X[i], S.Y[i], 15, 0, 6.283); ctx.stroke(); }
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    function draw() {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+      drawSlots(); drawTrails(); drawViz(); drawCars(); drawHeld(); drawSparks();
+      const line = (name, lo, hi, x) => {
+        let n = 0, stuck = 0; for (let k = lo; k < hi; k++) if (S.state[k] === 1) { n++; if (car[k].at > 10) stuck++; }
+        const arr = x.arrived, avg = arr ? (x.tripSum / arr).toFixed(1) : '-';
+        return `${name}  cars ${n}   arrived ${arr}   avg trip ${avg} s   car-car contacts ${x.cc}   car-card contacts ${x.cd}   stuck now ${stuck}   gave up ${x.gaveUp}`;
+      };
+      statsEl.textContent = line('R rule-based          ', G, NSLOT, stats.R) + '\n' + line('D rule-based + diffusion', 0, G, stats.D);
+    }
+
+    // ---------------------------------------------------------------- interaction
+    cards.forEach(c => {
+      let sx, sy, ox, oy, id = null;
+      c.el.addEventListener('pointerdown', e => { id = e.pointerId; c.el.setPointerCapture(id); sx = e.clientX; sy = e.clientY; ox = c.x; oy = c.y; c.el.classList.add('dragging'); });
+      c.el.addEventListener('pointermove', e => { if (e.pointerId !== id) return;
+        const px = c.x, py = c.y, t = performance.now(); c.x = ox + e.clientX - sx; c.y = oy + e.clientY - sy; placeCard(c); worldDirty = true;
+        const dt = (t - c.lt) / 1000; if (c.lt && dt > 0.002) { c.vx = 0.5 * c.vx + 0.5 * (c.x - px) / dt; c.vy = 0.5 * c.vy + 0.5 * (c.y - py) / dt; } c.lt = t; });
+      const end = e => { if (e.pointerId === id) { id = null; c.el.classList.remove('dragging'); worldDirty = true; c.vx = c.vy = 0; } };
+      c.el.addEventListener('pointerup', end); c.el.addEventListener('pointercancel', end);
+      c.el.addEventListener('dragstart', e => e.preventDefault());
+    });
+    // grab a car with the mouse; on release it flies off with the speed of the mouse
+    let held = null;   // { k, id, samples: [[t, x, y]] }
+    const THROWCAP = 420;
+    stage.addEventListener('pointerdown', e => {
+      const r = stage.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      let best = -1, bd = 18;
+      for (let k = 0; k < NSLOT; k++) if (S.state[k] === 1 && vis(k)) { const d = Math.hypot(S.X[k] - x, S.Y[k] - y); if (d < bd) { bd = d; best = k; } }
+      if (best < 0) return;
+      e.stopPropagation(); e.preventDefault(); stage.setPointerCapture(e.pointerId);
+      held = { k: best, id: e.pointerId, samples: [[performance.now(), x, y]] }; B.bx[best] = B.by[best] = B.om[best] = 0; S.V[best] = 0; stage.style.cursor = 'grabbing';
+    }, true);
+    stage.addEventListener('pointermove', e => {
+      if (!held || e.pointerId !== held.id) return;
+      const r = stage.getBoundingClientRect(), t = performance.now(); held.samples.push([t, e.clientX - r.left, e.clientY - r.top]);
+      while (held.samples.length > 2 && t - held.samples[0][0] > 120) held.samples.shift();
+    });
+    const release = e => {
+      if (!held || e.pointerId !== held.id) return;
+      const sm = held.samples, a = sm[0], b = sm[sm.length - 1], dt = (b[0] - a[0]) / 1000, k = held.k;
+      let vx = 0, vy = 0; if (dt > 0.01 && performance.now() - b[0] < 100) { vx = (b[1] - a[1]) / dt; vy = (b[2] - a[2]) / dt; }
+      const sp = Math.hypot(vx, vy); if (sp > THROWCAP) { vx *= THROWCAP / sp; vy *= THROWCAP / sp; }
+      B.bx[k] = vx; B.by[k] = vy; S.V[k] = 0; car[k].ptr = 99;       // thrown: it slides on with the mouse velocity, the policy takes over again
+      held = null; stage.style.cursor = '';
+    };
+    stage.addEventListener('pointerup', release); stage.addEventListener('pointercancel', release);
+    let worldDirty = false, lastWorld = 0;
+    stage.addEventListener('pointermove', e => { const r = stage.getBoundingClientRect(); mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top; });
+    document.getElementById('pause').onclick = e => { paused = !paused; e.target.textContent = paused ? 'Play' : 'Pause'; };
+    document.getElementById('viz').onclick = e => { showViz = !showViz; e.target.textContent = 'Denoising view: ' + (showViz ? 'on' : 'off'); if (!showViz) viz = null; };
+    if (allMode) document.getElementById('mode').textContent = 'View: all cars, denoising';
+    document.getElementById('mode').onclick = e => { allMode = !allMode; viz = null; for (const k in allViz) delete allViz[k]; e.target.textContent = allMode ? 'View: all cars, denoising' : 'View: one car, 24 plans'; e.target.setAttribute('aria-pressed', allMode); };
+    const WMODES = ['World: only R (rule-based)', 'World: only D (rule-based + diffusion)', 'World: two worlds, same space', 'World: one world, same space'];
+    function setWorldMode(m) {                      // every switch removes the old world completely: the stage and the counters start empty, and only the chosen world is simulated
+      worldMode = m;
+      document.getElementById('showbtn').textContent = WMODES[m];
+      S.grp.set(Int8Array.from({ length: NSLOT }, (_, k) => worldMode === 3 ? 0 : (k < G ? 1 : 0)));
+      for (let k = 0; k < NSLOT; k++) { S.state[k] = 0; car[k].alpha = 0; B.bx[k] = B.by[k] = B.om[k] = 0; }
+      viz = null; for (const k in allViz) delete allViz[k]; sparks.length = 0; contact.cc.clear(); contact.cd.clear(); held = null; nextType = 0; simT = 0;
+      stats.D = mkStats(); stats.R = mkStats();
+    }
+    document.getElementById('showbtn').onclick = () => setWorldMode((worldMode + 1) % 4);
+    document.getElementById('live').onclick = e => { live = !live; viz = null; for (const k in allViz) delete allViz[k]; allT = 0;
+      e.target.textContent = live ? 'Plans: live, every 0.25 s' : 'Plans: slow denoising, every 2.5 s'; e.target.setAttribute('aria-pressed', live); };
+    if (live) document.getElementById('live').textContent = 'Plans: live, every 0.25 s';
+    const ub = document.getElementById('unstickbtn');
+    const ulabel = () => ub.textContent = unstick ? 'Unstick: on (stuck D cars drive full plans)' : 'Unstick: off (replan every step)';
+    ub.onclick = () => { unstick = !unstick; for (let k = 0; k < NSLOT; k++) { car[k].stuckMode = false; car[k].exec = EXEC; car[k].pbest = undefined; } ulabel(); }; ulabel();
+    document.getElementById('execbtn').onclick = e => { EXEC = EXEC % 4 + 1; for (let k = 0; k < NSLOT; k++) car[k].ptr = 99; viz = null; for (const k in allViz) delete allViz[k]; allT = 0;
+      e.target.textContent = 'Drive per plan: ' + EXEC + (EXEC === 1 ? ' step' : ' steps'); };
+    const rate = document.getElementById('rate');
+    rate.value = spawnRate; document.getElementById('ratev').textContent = spawnRate;
+    rate.oninput = () => { spawnRate = +rate.value; document.getElementById('ratev').textContent = spawnRate; };
+    const istep = document.getElementById('istep'), readout = document.getElementById('readout'), ibtn = document.getElementById('inspect');
+    function showReadout() {
+      const viz = allMode ? allViz[focus] : window.__viz();
+      if (!inspecting || !viz) return;
+      const st = +istep.value, pad = (x, n) => String(x).padStart(n);
+      let t = `car ${viz.car}, sample #1, denoising step ${st}/${STEPS}  (network output, not drawn by hand)\n   t(s)   speed px/s   steer deg   | clean-plan guess: speed  steer\n`;
+      for (let h = 0; h < HC; h++) {
+        const g = i => Math.max(-1, Math.min(1, viz.xs[(st) * 16 + 2 * h + i])), q = i => Math.max(-1, Math.min(1, viz.xhat[Math.min(st, STEPS - 1) * 16 + 2 * h + i]));
+        t += `  ${pad(((h + 1) * DTC).toFixed(2), 5)}  ${pad((g(0) * 52.5 + 22.5).toFixed(1), 10)}  ${pad((g(1) * MAXST * 180 / Math.PI).toFixed(1), 10)}   |  ${pad((q(0) * 52.5 + 22.5).toFixed(1), 22)}  ${pad((q(1) * MAXST * 180 / Math.PI).toFixed(1), 6)}\n`;
+      }
+      readout.textContent = t;
+    }
+    window.__viz = () => viz;
+    ibtn.onclick = async () => {
+      inspecting = !inspecting;
+      if (inspecting) { if (allMode) { forceAll = true; await decide(); forceAll = false; } if (!(allMode ? allViz[focus] : viz)) { inspecting = false; return; } paused = true; document.getElementById('pause').textContent = 'Play'; if (!allMode) viz.t0 = performance.now(); }
+      else { paused = false; document.getElementById('pause').textContent = 'Pause'; viz = null; }
+      ibtn.textContent = inspecting ? 'Stop inspecting' : 'Inspect denoising steps'; istep.style.display = readout.style.display = inspecting ? '' : 'none'; showReadout();
+    };
+    istep.oninput = showReadout;
+
+    function resize() {
+      W = stage.clientWidth; H = stage.clientHeight; dpr = window.devicePixelRatio || 1;
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      ({ gw, gh } = Sim.grid(W, H)); cards.forEach(placeCard); blocked = Sim.buildBlocked(walls(), W, H, Sim.INFLATE);
+    }
+    resize(); layout(); applySlots(); mouse.x = W * 0.12; mouse.y = H * 0.5;
+    document.getElementById('showbtn').textContent = WMODES[worldMode]; if (worldMode === 3) S.grp.fill(0);
+    { const hm = QP.get('mouse'); if (hm && hm.startsWith('hood')) { const c = cards[+hm[4]], m = c.x + c.w / 2, y0 = c.y + HS;   // test helper: put the mouse (the spawn point) beside a hood, ?mouse=hood0left or hood0right
+        mouse.x = hm.endsWith('left') ? m - SW / 2 - 40 : m + SW / 2 + 40; mouse.y = y0 + SD / 2; } }
+    new ResizeObserver(() => { resize(); refreshWorld(); }).observe(stage);
+
+    // ---------------------------------------------------------------- main loop: real time, one 0.05 s step at a time
+    let acc = 0, sub = 0, last = performance.now(), running = false;
+    async function frame(now) {
+      acc = Math.min(acc + (now - last) / 1000, 0.15); last = now;
+      for (const c of cards) if (c.vx || c.vy) if (performance.now() - c.lt > 80) c.vx = c.vy = 0;       // a card the pointer has stopped moving has stopped
+      if (!running) {
+        running = true;
+        try {
+          if (worldDirty && now - lastWorld > 80) { worldDirty = false; lastWorld = now; refreshWorld(); }
+          while (!paused && acc >= DT) {
+            if (sub === 0) await decide();
+            if (held) { const sm = held.samples[held.samples.length - 1], k = held.k; if (S.state[k] !== 1) held = null; else { vt[k] = 0; dl[k] = 0; S.X[k] = sm[1]; S.Y[k] = sm[2]; S.V[k] = 0; B.bx[k] = B.by[k] = B.om[k] = 0; } }
+            for (let k = 0; k < NSLOT; k++) if (S.state[k] === 2) car[k].tun += DT;
+            simT += DT;
+            Sim.substep(S, vt, dl); for (const e of Sim.physics(S, B, walls(), W, H, bays(), owners(), wallVels())) sparks.push([e[0], e[1], Math.min(1, e[2] / 60), 0, e[3]]); checkArrivals(); acc -= DT; sub++;
+            for (let k = 0; k < NSLOT; k++) if (S.state[k] === 1) {
+              const tr = car[k].trail; tr.push(S.X[k], S.Y[k]); if (tr.length > 80) tr.splice(0, 2);
+            }
+            if (sub === SUB) { sub = 0; afterDecision(); }
+          }
+        } catch (e) { statusEl.textContent = 'error: ' + e; console.error(e); }
+        running = false;
+      }
+      draw();
+      requestAnimationFrame(frame);
+    }
+    const aud = { carPairs: 0, worstCar: 0, wallHits: 0, worstWall: 0, crossPairs: 0 };      // test helper: overlaps that remain after the physics step
+    function audit() {
+      const rects = walls();
+      for (let i = 0; i < NSLOT; i++) {
+        if (S.state[i] !== 1) continue;
+        for (let j = i + 1; j < NSLOT; j++) {
+          if (S.state[j] !== 1) continue;
+          const pen = 12 - Sim.carDist(S.X[i], S.Y[i], S.TH[i], S.X[j], S.Y[j], S.TH[j]);
+          if (isD(i) === isD(j)) { if (pen > 1) { aud.carPairs++; aud.worstCar = Math.max(aud.worstCar, pen); } } else if (pen > 1) aud.crossPairs++;
+        }
+        for (const o of [-7, 0, 7]) { const px = S.X[i] + Math.cos(S.TH[i]) * o, py = S.Y[i] + Math.sin(S.TH[i]) * o;
+          for (const q of rects) { const pen = 6 - Sim.rectDist(px, py, q[0], q[1], q[2], q[3]); if (pen > 1) { aud.wallHits++; aud.worstWall = Math.max(aud.worstWall, pen); } } }
+      }
+    }
+    const testN = +new URLSearchParams(location.search).get('test') || 0;
+    if (testN) {                                   // headless check: run testN decisions as fast as possible, then report
+      const tStart = performance.now(); let tInf = 0, nInf = 0;
+      for (let d = 0; d < testN; d++) { const a0 = performance.now(); await decide(); tInf += performance.now() - a0; nInf++; for (let k = 0; k < SUB; k++) { simT += DT; Sim.substep(S, vt, dl); Sim.physics(S, B, walls(), W, H, bays(), owners(), wallVels()); checkArrivals(); if (QP.get('audit')) audit(); for (let q = 0; q < NSLOT; q++) if (S.state[q] === 1) { const tr = car[q].trail; tr.push(S.X[q], S.Y[q]); if (tr.length > 80) tr.splice(0, 2); } } afterDecision(); }
+      if (QP.get('audit')) stats.audit = aud;
+      stats.ms_per_decision = +(tInf / nInf).toFixed(1);   // policy + observation building, per 0.25 s step
+      for (let k = 0; k < 8; k++) draw();                // let the cars fade in
+      document.title = JSON.stringify(stats);
+      document.body.insertAdjacentHTML('beforeend', '<pre id="durl">' + cv.toDataURL() + '</pre><pre id="cards">' + JSON.stringify(cards.map(c => [c.x, c.y, c.w, c.h])) + '</pre>');
+      return;
+    }
+    statusEl.textContent = 'running: D = 8-step flow-matching policy, ONNX in the browser (default: the 32k-parameter network; ?model=2k, ?model=small or ?model=big for others)';
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

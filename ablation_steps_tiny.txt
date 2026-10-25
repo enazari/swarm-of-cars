@@ -1,0 +1,24 @@
+d32k steps=1
+'arrived_pct': 98.94 'cc': 2 'override': 11300
+d32k steps=2
+'arrived_pct': 98.52 'cc': 2 'override': 7043
+d32k steps=4
+'arrived_pct': 99.39 'cc': 0 'override': 5713
+d32k steps=8
+'arrived_pct': 99.28 'cc': 1 'override': 5821
+d2k_s0 steps=1
+'arrived_pct': 88.66 'cc': 0 'override': 151622
+d2k_s0 steps=2
+'arrived_pct': 97.78 'cc': 0 'override': 50266
+d2k_s0 steps=4
+'arrived_pct': 98.18 'cc': 0 'override': 40322
+d2k_s0 steps=8
+'arrived_pct': 98.33 'cc': 0 'override': 39372
+d1k_s0 steps=1
+'arrived_pct': 75.52 'cc': 3 'override': 395065
+d1k_s0 steps=2
+'arrived_pct': 87.64 'cc': 4 'override': 237646
+d1k_s0 steps=4
+'arrived_pct': 92.42 'cc': 2 'override': 188105
+d1k_s0 steps=8
+'arrived_pct': 94.33 'cc': 4 'override': 163912

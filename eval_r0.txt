@@ -1,0 +1,6 @@
+{'policy': 'diff', 'safety': False, 'scenes': 96, 'cars': 1338, 'arrived': 1333, 'arrived_pct': 99.63, 'cc': 202, 'cd': 12, 'override': 0, 'mean_t': 7.38, 'stream_arrived_pct': 99.8, 'crowd_arrived_pct': 99.5} wall 33s
+{'policy': 'diff', 'safety': True, 'scenes': 96, 'cars': 1338, 'arrived': 1329, 'arrived_pct': 99.33, 'cc': 55, 'cd': 6, 'override': 4771, 'mean_t': 8.28, 'stream_arrived_pct': 100.0, 'crowd_arrived_pct': 98.8} wall 38s
+{'policy': 'bc', 'safety': False, 'scenes': 96, 'cars': 1338, 'arrived': 1315, 'arrived_pct': 98.28, 'cc': 183, 'cd': 19, 'override': 0, 'mean_t': 7.24, 'stream_arrived_pct': 98.5, 'crowd_arrived_pct': 98.1} wall 8s
+{'policy': 'bc', 'safety': True, 'scenes': 96, 'cars': 1338, 'arrived': 1255, 'arrived_pct': 93.8, 'cc': 58, 'cd': 8, 'override': 18784, 'mean_t': 7.71, 'stream_arrived_pct': 97.6, 'crowd_arrived_pct': 90.8} wall 11s
+{'policy': 'diff', 'safety': False, 'scenes': 96, 'cars': 1338, 'arrived': 1333, 'arrived_pct': 99.63, 'cc': 167, 'cd': 11, 'override': 0, 'mean_t': 7.35, 'stream_arrived_pct': 100.0, 'crowd_arrived_pct': 99.3} wall 33s
+{'policy': 'diff', 'safety': True, 'scenes': 96, 'cars': 1338, 'arrived': 1336, 'arrived_pct': 99.85, 'cc': 57, 'cd': 5, 'override': 1138, 'mean_t': 7.88, 'stream_arrived_pct': 99.8, 'crowd_arrived_pct': 99.9} wall 34s

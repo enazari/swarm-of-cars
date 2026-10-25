@@ -1,0 +1,8 @@
+steps=2
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 1338, 'arrived': 1327, 'arrived_pct': 99.18, 'cc': 0, 'cd': 0, 'override': 106, 'mean_t': 7.21, 'stream_arrived_pct': 99.8, 'crowd_arrived_pct': 98.7} wall 
+steps=4
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 1338, 'arrived': 1328, 'arrived_pct': 99.25, 'cc': 0, 'cd': 1, 'override': 109, 'mean_t': 7.27, 'stream_arrived_pct': 99.7, 'crowd_arrived_pct': 98.9} wall 
+steps=8
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 1338, 'arrived': 1330, 'arrived_pct': 99.4, 'cc': 0, 'cd': 1, 'override': 94, 'mean_t': 7.52, 'stream_arrived_pct': 99.7, 'crowd_arrived_pct': 99.2} wall 14
+steps=16
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 1338, 'arrived': 1324, 'arrived_pct': 98.95, 'cc': 0, 'cd': 1, 'override': 127, 'mean_t': 7.41, 'stream_arrived_pct': 99.2, 'crowd_arrived_pct': 98.8} wall 

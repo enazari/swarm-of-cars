@@ -1,0 +1,39 @@
+##### test set: --n 192
+== rule --n 192
+{'hard': False, 'nsamp': 1, 'policy': 'rule', 'safety': False, 'scenes': 192, 'cars': 2766, 'arrived': 2762, 'arrived_pct': 99.86, 'cc': 545, 'cd': 85, 'override': 0, 'mean_t': 7.2, 'stream_arrived_pct': 100.0, 'crowd_arrived_pct': 99.7} wall 1s
+== rule --n 192 --safety2
+{'hard': False, 'nsamp': 1, 'policy': 'rule', 'safety': 'v2', 'scenes': 192, 'cars': 2766, 'arrived': 2095, 'arrived_pct': 75.74, 'cc': 0, 'cd': 7, 'override': 157499, 'mean_t': 6.65, 'stream_arrived_pct': 100.0, 'crowd_arrived_pct': 57.0} wall 2s
+== teacher --n 192
+{'hard': False, 'nsamp': 1, 'policy': 'teacher', 'safety': False, 'scenes': 192, 'cars': 2766, 'arrived': 2734, 'arrived_pct': 98.84, 'cc': 1, 'cd': 0, 'override': 0, 'mean_t': 7.1, 'stream_arrived_pct': 99.3, 'crowd_arrived_pct': 98.5} wall 123s
+== bc --ckpt ckpt/bc_r3.pt --n 192
+{'hard': False, 'nsamp': 1, 'policy': 'bc', 'safety': False, 'scenes': 192, 'cars': 2766, 'arrived': 2733, 'arrived_pct': 98.81, 'cc': 54, 'cd': 11, 'override': 0, 'mean_t': 7.22, 'stream_arrived_pct': 98.9, 'crowd_arrived_pct': 98.7} wall 21s
+== bc --ckpt ckpt/bc_r3.pt --n 192 --safety2
+{'hard': False, 'nsamp': 1, 'policy': 'bc', 'safety': 'v2', 'scenes': 192, 'cars': 2766, 'arrived': 2727, 'arrived_pct': 98.59, 'cc': 0, 'cd': 0, 'override': 1198, 'mean_t': 7.28, 'stream_arrived_pct': 98.8, 'crowd_arrived_pct': 98.4} wall 22s
+== diff --ckpt ckpt/diff_r3.pt --n 192
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': False, 'scenes': 192, 'cars': 2766, 'arrived': 2746, 'arrived_pct': 99.28, 'cc': 68, 'cd': 11, 'override': 0, 'mean_t': 7.39, 'stream_arrived_pct': 99.5, 'crowd_arrived_pct': 99.1} wall 105s
+== diff --ckpt ckpt/diff_r3.pt --n 192 --safety2
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 192, 'cars': 2766, 'arrived': 2745, 'arrived_pct': 99.24, 'cc': 0, 'cd': 2, 'override': 311, 'mean_t': 7.41, 'stream_arrived_pct': 99.5, 'crowd_arrived_pct': 99.0} wall 106s
+== diff --ckpt ckpt/diff_big_r3.pt --n 192
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': False, 'scenes': 192, 'cars': 2766, 'arrived': 2747, 'arrived_pct': 99.31, 'cc': 56, 'cd': 8, 'override': 0, 'mean_t': 7.36, 'stream_arrived_pct': 99.6, 'crowd_arrived_pct': 99.1} wall 284s
+== diff --ckpt ckpt/diff_big_r3.pt --n 192 --safety2
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 192, 'cars': 2766, 'arrived': 2748, 'arrived_pct': 99.35, 'cc': 0, 'cd': 1, 'override': 270, 'mean_t': 7.44, 'stream_arrived_pct': 99.6, 'crowd_arrived_pct': 99.2} wall 289s
+##### test set: --n 96 --hard
+== rule --n 96 --hard
+{'hard': True, 'nsamp': 1, 'policy': 'rule', 'safety': False, 'scenes': 96, 'cars': 2275, 'arrived': 2227, 'arrived_pct': 97.89, 'cc': 1121, 'cd': 130, 'override': 0, 'mean_t': 7.92, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 97.9} wall 1s
+== rule --n 96 --hard --safety2
+{'hard': True, 'nsamp': 1, 'policy': 'rule', 'safety': 'v2', 'scenes': 96, 'cars': 2275, 'arrived': 976, 'arrived_pct': 42.9, 'cc': 0, 'cd': 12, 'override': 287501, 'mean_t': 6.16, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 42.9} wall 3s
+== teacher --n 96 --hard
+{'hard': True, 'nsamp': 1, 'policy': 'teacher', 'safety': False, 'scenes': 96, 'cars': 2275, 'arrived': 2246, 'arrived_pct': 98.73, 'cc': 2, 'cd': 1, 'override': 0, 'mean_t': 8.4, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 98.7} wall 171s
+== bc --ckpt ckpt/bc_r3.pt --n 96 --hard
+{'hard': True, 'nsamp': 1, 'policy': 'bc', 'safety': False, 'scenes': 96, 'cars': 2275, 'arrived': 2224, 'arrived_pct': 97.76, 'cc': 102, 'cd': 20, 'override': 0, 'mean_t': 8.67, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 97.8} wall 21s
+== bc --ckpt ckpt/bc_r3.pt --n 96 --hard --safety2
+{'hard': True, 'nsamp': 1, 'policy': 'bc', 'safety': 'v2', 'scenes': 96, 'cars': 2275, 'arrived': 2214, 'arrived_pct': 97.32, 'cc': 0, 'cd': 3, 'override': 2320, 'mean_t': 8.79, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 97.3} wall 22s
+== diff --ckpt ckpt/diff_r3.pt --n 96 --hard
+{'hard': True, 'nsamp': 1, 'policy': 'diff', 'safety': False, 'scenes': 96, 'cars': 2275, 'arrived': 2254, 'arrived_pct': 99.08, 'cc': 157, 'cd': 18, 'override': 0, 'mean_t': 8.91, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 99.1} wall 74s
+== diff --ckpt ckpt/diff_r3.pt --n 96 --hard --safety2
+{'hard': True, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 2275, 'arrived': 2256, 'arrived_pct': 99.16, 'cc': 1, 'cd': 3, 'override': 900, 'mean_t': 9.23, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 99.2} wall 75s
+== diff --ckpt ckpt/diff_big_r3.pt --n 96 --hard
+{'hard': True, 'nsamp': 1, 'policy': 'diff', 'safety': False, 'scenes': 96, 'cars': 2275, 'arrived': 2252, 'arrived_pct': 98.99, 'cc': 134, 'cd': 18, 'override': 0, 'mean_t': 8.91, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 99.0} wall 199s
+== diff --ckpt ckpt/diff_big_r3.pt --n 96 --hard --safety2
+{'hard': True, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 2275, 'arrived': 2253, 'arrived_pct': 99.03, 'cc': 0, 'cd': 3, 'override': 740, 'mean_t': 9.03, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 99.0} wall 200s
+FINISHED

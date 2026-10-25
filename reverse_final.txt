@@ -1,0 +1,1 @@
+student ckpt/diff_big_r3.pt, hard scenes: 5.3% of driving time in reverse; 254/567 cars (45%) reversed at least once

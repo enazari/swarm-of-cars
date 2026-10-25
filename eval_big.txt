@@ -1,0 +1,4 @@
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': False, 'scenes': 96, 'cars': 1338, 'arrived': 1330, 'arrived_pct': 99.4, 'cc': 17, 'cd': 5, 'override': 0, 'mean_t': 7.37, 'stream_arrived_pct': 99.7, 'crowd_arrived_pct': 99.2} wall 139s
+{'hard': False, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 96, 'cars': 1338, 'arrived': 1331, 'arrived_pct': 99.48, 'cc': 0, 'cd': 1, 'override': 117, 'mean_t': 7.43, 'stream_arrived_pct': 99.7, 'crowd_arrived_pct': 99.3} wall 140s
+{'hard': True, 'nsamp': 1, 'policy': 'diff', 'safety': False, 'scenes': 48, 'cars': 1134, 'arrived': 1125, 'arrived_pct': 99.21, 'cc': 59, 'cd': 8, 'override': 0, 'mean_t': 8.73, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 99.2} wall 100s
+{'hard': True, 'nsamp': 1, 'policy': 'diff', 'safety': 'v2', 'scenes': 48, 'cars': 1134, 'arrived': 1123, 'arrived_pct': 99.03, 'cc': 0, 'cd': 2, 'override': 469, 'mean_t': 8.86, 'stream_arrived_pct': 0.0, 'crowd_arrived_pct': 99.0} wall 103s
