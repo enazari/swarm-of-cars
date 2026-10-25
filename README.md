@@ -1,101 +1,77 @@
-# Diffusion policy for cars
+# Swarm of cars: rule-based vs rule-based + diffusion
 
-A small flow-matching ("diffusion") policy that drives many cars at once to their own parking spots, around cards and around each other,
-including reversing out of jams. It is trained by imitating a privileged planner (the *teacher*) and improved with DAgger.
-It runs in the browser (ONNX) and in Python.
+A browser demo and training code for a small flow-matching ("diffusion") driving policy. Cars spawn at the mouse and drive to a tunnel
+entrance cut into the bottom edge of a card, around the cards and around each other. Every spawn releases **two cars with the same goal**:
 
-![denoising](denoising_example.png)
+- **R**: a strictly rule-based driver (pure pursuit on a Dijkstra route, a speed rule, braking for a car straight ahead).
+- **D**: the same route given as an *input* to a neural network that starts from noise every 0.25 s, denoises a 2 s plan of
+  (target speed, steering) and drives the first step.
 
-*32 plans sampled for one car (orange). Step 0 is pure noise; the plans split into a few routes and settle onto the one the teacher also takes (green dashed).*
+Both get the same physics (rigid-body collisions, grab and throw with the mouse, cards that shove cars). There is no safety rule in the page.
+Details: [`DEMO_EXPLAINER.md`](DEMO_EXPLAINER.md) (what the demo shows) and [`GPS_ANALOGY.md`](GPS_ANALOGY.md) (exactly what the model sees and decides).
 
-## Result
-
-Closed-loop simulation on scenes the models never saw. Every method gets the same scenes. 192 standard scenes (2766 cars) and 96 hard scenes
-(2275 cars: crowded, 20-28 cars, gaps of only 44-58 px between cards). "contacts" are new car-car / car-card contacts (body circles touching).
-
-| standard set | cars that arrive | car-car contacts | car-card contacts |
-|---|---|---|---|
-| page-style rule driver, no safety rule | 99.9% | 545 | 85 |
-| page-style rule driver + safety rule | 75.7% (crowds 57%) | 0 | 7 |
-| teacher (sees everything, slow) | 98.8% | 1 | 0 |
-| regression policy + safety rule | 98.6% | 0 | 0 |
-| **diffusion policy (big) + safety rule** | **99.35%** | **0** | **1** |
-| diffusion policy (small) + safety rule | 99.24% | 0 | 2 |
-| diffusion policy (big), raw | 99.3% | 56 | 8 |
-
-| hard set | cars that arrive | car-car contacts | car-card contacts |
-|---|---|---|---|
-| page-style rule driver, no safety rule | 97.9% | 1121 | 130 |
-| page-style rule driver + safety rule | 42.9% | 0 | 12 |
-| teacher | 98.7% | 2 | 1 |
-| regression policy + safety rule | 97.3% | 0 | 3 |
-| **diffusion policy (big) + safety rule** | **99.0%** | **0** | **3** |
-| diffusion policy (small) + safety rule | 99.2% | 1 | 3 |
-| diffusion policy (big), raw | 99.0% | 134 | 18 |
-
-![chart](results_chart.png)
-
-What this says, honestly:
-
-* The old failure is real: the rule driver either drives through everything (hundreds of contacts) or, with a safety rule, jams (43-76% arrive).
-* The deployed system is **policy + safety rule**. The raw policy still touches about 2% of cars (6% on the hard set); the rule removes those.
-* The diffusion policy beats a plain regression policy trained on identical data by 0.8 points of arrival on the standard set and 1.7 on the hard set,
-  and the safety rule has to step in about 4 times less often (270 vs 1198 overrides, 740 vs 2320). The gap is real but not dramatic.
-* It matches the teacher's arrival rate (the teacher's own failures are cars parked just short of their spot) and is a bit slower
-  (mean time to goal 7.4 s vs 7.1 s standard, 9.0 s vs 8.4 s hard).
-* It learned to reverse: on the hard scenes 45% of cars reverse at least once (5.3% of driving time); the teacher does it for 28% of cars.
-* Things that did **not** help: sampling 8 plans and picking the safe one with most progress (99.7% -> 98.5%, cars rush into jams);
-  executing several actions of a plan before re-planning (replanning every 0.25 s cut raw contacts 4x); more than 8 denoising steps.
-* Denoising steps (big model + safety rule, 96 scenes): 2 steps 99.2%, 4 steps 99.25%, 8 steps 99.4%, 16 steps 98.95%. So 4 steps would do and halve the cost.
-
-## Use it
+## Run the demo
 
 ```bash
-cd policy/web && python3 -m http.server 8001      # then open http://localhost:8001
-```
-The page spawns cars at your mouse, you can drag the cards, toggle the safety rule, and watch the denoising of one car (thin lines = 24 sampled plans,
-dashed = the model's current guess, thick = the plan that is driven). Default model is the small one (~22 ms for 20 cars on one CPU thread, native);
-`?model=big` loads the larger network (~53 ms). The page loads onnxruntime-web from a CDN.
-
-In Python:
-```python
-import policy
-pol = policy.StudentPolicy("final/diffusion_policy_big.pt", device="cpu", steps=8, exec_n=1)   # exec_n=1: replan every step
-pol.reset(env.n); vt, dl = pol.act(env); env.step(vt, dl, safety=2)                              # safety=2: the stronger rule
+cd web && python3 -m http.server 8001      # open http://localhost:8001 (hard-reload after updates)
 ```
 
-## What is in here
+The page loads onnxruntime-web from a CDN. The default model is the 32k-parameter one; `?model=2k|small|big` switches.
+The World button has four modes (only R, only D, both in the same space but not interacting, one shared traffic).
+Other buttons: plan display (slow or live), drive-per-plan, a denoising-step inspector, and an optional "unstick" mode (`?unstick=1`).
 
-| file | what |
-|---|---|
-| `core.py` | car physics (bicycle model, forward and reverse), grid cost-to-go fields, ego observations, teacher rollouts, both safety rules (numba) |
-| `env.py` | random scenes (cards, goals, spawn pattern) and the multi-car environment, metrics |
-| `teacher.py` | the privileged teacher: prioritised sampling MPC, 512 plans, 3 s horizon, reverse / three-point-turn / creep samples, traffic-aware routes |
-| `model.py` | encoder (map crop CNN + route/goal vector + neighbour tokens) and the flow-matching denoiser (also a regression variant) |
-| `gen_data.py`, `dagger_gen.py`, `consolidate.py` | dataset generation, DAgger rounds |
-| `train.py` | training (EMA, left-right mirror augmentation, loss weight on the first executed actions) |
-| `policy.py`, `eval_policy.py`, `final_eval.sh`, `summarize.py` | closed-loop policy, evaluation, the final comparison (`results.txt`) |
-| `export.py` | ONNX export with all denoising steps unrolled (also returns every intermediate plan for the visualisation) |
-| `web/` | the browser page, `sim.js` (JavaScript port of the simulator, checked against Python: `node web/parity_test.js` shows 0 difference), the ONNX models |
-| `final/` | final PyTorch checkpoints (big / small diffusion policy, regression baseline) |
-| `LOG.md` | what was done, in order, with numbers |
+## Results (headless runs of the demo's own setup)
+
+4 seeded runs of 375 s, up to 40 cars per world, 10 spawns/s, no safety rule; sums over the 4 runs.
+
+| | arrived | car-car contacts | car-card contacts | avg trip | gave up |
+|---|---|---|---|---|---|
+| R (rules) | 941-1028 | 0 | 46-64 | 7.7-7.9 s | 0 |
+| D 13.7M | 1023 | 0 | 0 | 7.3 s | 7 |
+| D 5.8M | 918 | 3 | 0 | 7.4 s | 21 |
+| D 32k (default) | 946 | 7 | 0 | 8.6 s | 5 |
+| D 2k | 939 | 28 | 12 | 9.1 s | 0 |
+
+Python closed-loop evaluation (384 standard scenes, 5470 cars; 192 hard scenes, 4603 cars; safety rule on):
+diffusion keeps 99%+ arrival from 13.7M down to 2k parameters (about 98.7% on the hard set at 2k), while a regression policy of the same
+design collapses when small (32k: 94.6% / 87.2%, 2k: 74.8% / 41.9%). See `results_ladder_table.txt` and `results_ladder.png`.
+
+Honest reading:
+
+- The rules never hit other cars (they brake for a car ahead) but scrape cards. Diffusion keeps clear of cards from 32k up.
+- Small models bump other cars a little. Without a safety rule the 2k model avoids cars no better than the rules (0.25 vs 0.20 contacts per car);
+  the 13.7M model is about 10x better (0.021). The clearly learned traffic behaviour shows from 32k up.
+- A few D cars get stuck for good in jams the model never saw in training. The fix is more training data of that kind, not programmed driving.
+- Browser speed is not measured. Native ONNX on one CPU thread for 20 cars: 13.7M about 53 ms, 5.8M 22 ms, 32k 0.6 ms, 2k 0.45 ms.
 
 ## How it works
 
-* **Observation of one car** (all in the car's own frame): a 32x32 crop (6 px cells, 192 px wide, looking ahead) with cards, other cars and their velocities;
-  the next 6 points of the shortest route to its goal (cost-to-go field, the same thing an A* planner gives the page); goal vector, speed, last action;
-  the 6 nearest cars as tokens (relative position, heading, velocity).
-* **Action:** 8 steps of (target speed in [-30, 75] px/s, steering angle), 0.25 s per step. Only the first step is executed, then it re-plans.
-* **Teacher:** sees every car, plans in the true dynamics with 512 sampled control sequences per car in priority order (higher-priority cars' plans are
-  obstacles), and re-routes around standing cars. It can wait, reverse and do three-point turns. 98.8% of its cars arrive, with essentially no contacts.
-* **Training:** round 0 = 1.06M teacher decisions with noise injected into the executed actions; then three DAgger rounds where the student drives
-  and the teacher labels the states the student reached (3.1M samples in all). Flow matching, 8 Euler steps at inference.
-* **Safety rule:** assume every car brakes after the next 0.25 s; any action that would still lead to a contact is replaced by braking (for both cars of a threatened pair).
+- **Observation per car** (own frame): a 4x32x32 map (cards, cars, their velocities; 6 px cells, centred 40 px ahead), an 18-number vector
+  (goal, speed, last action, 6 route points from a Dijkstra field), and the 6 nearest cars as tokens.
+- **Action:** 8 steps of (target speed in [-30, 75] px/s, steering), 0.25 s each; the page uses the first step and re-plans.
+- **Teacher:** a privileged sampling MPC that sees every car (512 plans, 3 s horizon, reverse and three-point-turn samples).
+- **Training:** 3.1M teacher samples, one round of teacher data with injected noise plus three DAgger rounds. Flow matching, 8 Euler steps.
+- **Programmed parts:** the route hint, car physics, the tunnel arrival and exit script, removal of a car that stays put for 60 s, and the rule-based R driver.
+
+## Files
+
+| file | what |
+|---|---|
+| `web/` | the demo: `index.html`, `sim.js` (JavaScript simulator, checked against Python with `node web/parity_test.js`, which should print zeros), ONNX models |
+| `final/` | PyTorch checkpoints: diffusion policy at 13.7M / 5.8M / 1M / 340k / 100k / 32k / 2k parameters, and the regression baseline |
+| `core.py`, `env.py` | car physics, grid fields, observations, random scenes and the multi-car environment |
+| `teacher.py` | the privileged teacher |
+| `gen_data.py`, `dagger_gen.py`, `consolidate.py`, `policy.py` | teacher data generation, DAgger rounds, dataset merging, closed-loop student policy |
+| `model.py`, `train.py` | encoder and denoiser (width options `--ec`, `--d`, `--pool`), training |
+| `eval_policy.py`, `eval_ladder.sh`, `summarize_ladder.py`, `run_jobs.sh` | closed-loop evaluation and the model-size ladder |
+| `export.py` | ONNX export with all denoising steps unrolled |
+| `viz_*.py`, `denoising_*.png` | denoising visualisations |
+| `LOG.md` | what was done, in order, with numbers |
+
+Training data (13 GB) and intermediate checkpoints are not in the repository.
 
 ## Limits
 
-* Trained and tested in simulation on layouts with card sizes 120-230 x 55-100 px, gaps >= 44 px and worlds of 720-1180 x 430-640 px. The page uses 190 x 70 cards in a
-  1100 x 520 stage, which is inside that range; very tight gaps, tiny windows and overlapping cards are outside it.
-* Contacts without the safety rule are not zero. The "0" in the tables is for policy + rule.
-* The student is distilled from the teacher; it can match it but is not expected to beat it. Better than the teacher would need reinforcement learning on top.
-* About 4.7 hours of the 8-hour budget were used (teacher + data 1.5 h, four training rounds, evaluation, browser port).
+- Layouts need gaps of at least about 45 px between cards. The 2k model was never trained on notches or crowds (training scenes had up to 28 cars).
+- At very high density D trips become much slower than R's.
+- The student imitates the teacher; it is not expected to beat it.
